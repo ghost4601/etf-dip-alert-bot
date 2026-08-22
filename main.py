@@ -1,126 +1,703 @@
 import os
+import csv
 import requests
+from datetime import datetime
+from pathlib import Path
+
+
+# ============================================================
+# CONFIGURATION
+# ============================================================
+
+# Strategy:
+# If Nifty 50 falls by 0.40% or more in the current session,
+# generate a NIFTYBEES buy signal.
+
+NIFTY_THRESHOLD = -0.40
+
+# Amount to buy per signal
+BUY_AMOUNT = 250
+
+# Maximum amount to deploy per calendar month
+MONTHLY_LIMIT = 5000
+
+# Local signal log
+LOG_FILE = Path("niftybees_signals.csv")
+
+# GitHub Actions / environment variables
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+
+
+# ============================================================
+# TELEGRAM
+# ============================================================
 
 def send_telegram_alert(message):
-    bot_token = os.getenv(
-        'TELEGRAM_BOT_TOKEN', 
-        '8894245553:AAHNms2CBjhU5yWxgcEPaHffuZ1ocLtkU68'
-    ).strip()
-    chat_id = str(os.getenv('TELEGRAM_CHAT_ID', '1715656740')).strip()
+    """
+    Send a Telegram message using environment variables.
+    """
 
-    url = f'https://api.telegram.org/bot{bot_token}/sendMessage'
+    if not TELEGRAM_BOT_TOKEN:
+        print("ERROR: TELEGRAM_BOT_TOKEN is not configured.")
+        return False
+
+    if not TELEGRAM_CHAT_ID:
+        print("ERROR: TELEGRAM_CHAT_ID is not configured.")
+        return False
+
+    url = (
+        f"https://api.telegram.org/"
+        f"bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    )
+
     payload = {
-        'chat_id': chat_id, 
-        'text': message, 
-        'parse_mode': 'Markdown'
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": message,
+        "parse_mode": "Markdown"
     }
-    
-    try:
-        response = requests.post(url, json=payload, timeout=10)
-        data = response.json()
-        if response.status_code == 200 and data.get('ok'):
-            print("Telegram notification sent successfully.")
-        else:
-            print(f"Failed to send Telegram message: {data}")
-    except Exception as e:
-        print(f"Error sending Telegram alert: {e}")
 
-def get_yahoo_fallback(ticker):
-    """Fetches index data directly from Yahoo Finance."""
-    url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}"
+    try:
+        response = requests.post(
+            url,
+            json=payload,
+            timeout=15
+        )
+
+        response.raise_for_status()
+
+        data = response.json()
+
+        if data.get("ok"):
+            print("Telegram notification sent successfully.")
+            return True
+
+        print(f"Telegram API error: {data}")
+        return False
+
+    except Exception as e:
+        print(f"Telegram error: {e}")
+        return False
+
+
+# ============================================================
+# YAHOO FINANCE DATA
+# ============================================================
+
+def get_yahoo_data(ticker):
+    """
+    Fetch current market data from Yahoo Finance.
+
+    Returns:
+        percent_change
+        current_price
+        previous_close
+    """
+
+    url = (
+        f"https://query2.finance.yahoo.com/"
+        f"v8/finance/chart/{ticker}"
+    )
+
     headers = {
         "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            "Mozilla/5.0 "
+            "(Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 "
+            "(KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
         )
     }
-    response = requests.get(url, headers=headers, timeout=10)
+
+    response = requests.get(
+        url,
+        headers=headers,
+        timeout=15
+    )
+
+    response.raise_for_status()
+
     data = response.json()
-    
-    meta = data['chart']['result'][0]['meta']
-    last_price = float(meta['regularMarketPrice'])
-    prev_close = float(meta['chartPreviousClose'])
-    percent_change = ((last_price - prev_close) / prev_close) * 100
-    
-    return percent_change, last_price
 
-def check_market_dips():
-    # 📊 GLOBAL & DOMESTIC INDEX WATCHLIST
-    indices = {
-        'Nifty 50': '^NSEI',
-        'Bank Nifty': '^NSEBANK',
-        'Nifty IT': '^CNXIT',
-        'Sensex': '^BSESN',
-        'Nasdaq 100': '^NDX',
-        'S&P 500': '^GSPC'
-    }
+    result = data["chart"]["result"][0]
 
-    threshold = -0.40  # Alert triggered on drops >= 0.40%
-    triggers = []
-    daily_summary = []
+    meta = result["meta"]
 
-    print("Checking real-time market data across Index basket...")
-    base_url = "http://65.0.104.9/stock"
-    headers = {"User-Agent": "Mozilla/5.0"}
+    current_price = float(
+        meta["regularMarketPrice"]
+    )
 
-    for name, ticker in indices.items():
-        try:
-            # The primary API might not support '^' index symbols.
-            # If it fails, it instantly drops into the Yahoo fallback.
-            response = requests.get(f"{base_url}?symbol={ticker}&res=num", headers=headers, timeout=5)
-            data = response.json()
+    previous_close = float(
+        meta.get(
+            "chartPreviousClose",
+            meta.get("previousClose")
+        )
+    )
 
-            if data.get('status') == 'success':
-                stock_data = data.get('data', {})
-                percent_change = float(stock_data.get('percent_change', 0.0))
-                last_price = float(stock_data.get('last_price', 0.0))
-                source = ""
-            else:
-                raise ValueError("Primary API non-success (likely doesn't support indices)")
+    if previous_close == 0:
+        raise ValueError(
+            f"Previous close is zero for {ticker}"
+        )
 
-        except Exception:
-            print(f"Primary API bypassed for {ticker}. Fetching from Yahoo Finance...")
-            try:
-                percent_change, last_price = get_yahoo_fallback(ticker)
-                source = " *(via Yahoo)*"
-            except Exception as yf_err:
-                print(f"Fallback failed for {ticker}: {yf_err}")
-                continue
+    percent_change = (
+        (current_price - previous_close)
+        / previous_close
+    ) * 100
 
-        # Format positive/negative signs for the daily summary
-        change_sign = "+" if percent_change >= 0 else ""
-        
-        # We don't use ₹ for Nasdaq/S&P since they are in USD, so we keep it generic
-        currency = "$" if ticker in ['^NDX', '^GSPC'] else "₹"
-        daily_summary.append(f"• *{name}*: `{change_sign}{percent_change:.2f}%` ({currency}{last_price:.2f})")
+    return (
+        percent_change,
+        current_price,
+        previous_close
+    )
 
-        # Check if drop qualifies for alert
-        if percent_change <= threshold:
-            triggers.append(
-                f"• *{name}* (`{ticker}`)\n"
-                f"  Drop: *{percent_change:.2f}%*\n"
-                f"  Level: {currency}{last_price:.2f}{source}"
+
+# ============================================================
+# MONTHLY SPENDING
+# ============================================================
+
+def get_current_month_spend():
+    """
+    Calculate how much has already been allocated
+    during the current calendar month.
+    """
+
+    if not LOG_FILE.exists():
+        return 0.0
+
+    current_month = datetime.now().strftime("%Y-%m")
+
+    total = 0.0
+
+    try:
+
+        with open(
+            LOG_FILE,
+            "r",
+            newline="",
+            encoding="utf-8"
+        ) as file:
+
+            reader = csv.DictReader(file)
+
+            for row in reader:
+
+                timestamp = row.get(
+                    "timestamp",
+                    ""
+                )
+
+                if not timestamp.startswith(
+                    current_month
+                ):
+                    continue
+
+                try:
+
+                    amount = float(
+                        row.get(
+                            "buy_amount",
+                            0
+                        )
+                    )
+
+                    total += amount
+
+                except (
+                    ValueError,
+                    TypeError
+                ):
+                    continue
+
+    except Exception as e:
+
+        print(
+            f"Could not read signal log: {e}"
+        )
+
+    return total
+
+
+# ============================================================
+# CHECK WHETHER TODAY ALREADY GENERATED A SIGNAL
+# ============================================================
+
+def signal_already_logged_today():
+    """
+    Prevent duplicate purchases if the script runs
+    multiple times on the same day.
+    """
+
+    if not LOG_FILE.exists():
+        return False
+
+    today = datetime.now().strftime(
+        "%Y-%m-%d"
+    )
+
+    try:
+
+        with open(
+            LOG_FILE,
+            "r",
+            newline="",
+            encoding="utf-8"
+        ) as file:
+
+            reader = csv.DictReader(file)
+
+            for row in reader:
+
+                timestamp = row.get(
+                    "timestamp",
+                    ""
+                )
+
+                if timestamp.startswith(today):
+                    return True
+
+    except Exception as e:
+
+        print(
+            f"Could not check today's signals: {e}"
+        )
+
+    return False
+
+
+# ============================================================
+# LOG SIGNAL
+# ============================================================
+
+def log_signal(
+    nifty_change,
+    nifty_price,
+    niftybees_price,
+    buy_amount,
+    monthly_spend
+):
+    """
+    Save each buy signal to CSV.
+    """
+
+    file_exists = LOG_FILE.exists()
+
+    fields = [
+        "timestamp",
+        "nifty_change",
+        "nifty_price",
+        "niftybees_price",
+        "buy_amount",
+        "monthly_spend"
+    ]
+
+    try:
+
+        with open(
+            LOG_FILE,
+            "a",
+            newline="",
+            encoding="utf-8"
+        ) as file:
+
+            writer = csv.DictWriter(
+                file,
+                fieldnames=fields
             )
 
-    # Dispatch appropriate Telegram notification
-    if triggers:
-        alert_text = (
-            "🚨 *MAJOR INDEX DIP ALERT (≥ 0.4% Drop)* 🚨\n\n"
-            + "\n\n".join(triggers)
-            + "\n\n💡 _Log into your broker app to deploy capital into ETFs._"
-        )
-        print("Triggers detected! Dispatching Telegram alert...")
-        send_telegram_alert(alert_text)
-    else:
-        no_drop_text = (
-            "✅ *DAILY INDEX UPDATE (No Action Needed)*\n\n"
-            "No major index dropped ≥ 0.40% today.\n\n"
-            "*Today's Closes / Moves:*\n"
-            + "\n".join(daily_summary)
-            + "\n\n😴 _Keep your cash dry and enjoy your evening!_"
-        )
-        print("No index dropped beyond 0.4%. Sending daily summary ping...")
-        send_telegram_alert(no_drop_text)
+            if not file_exists:
+                writer.writeheader()
 
-if __name__ == '__main__':
-    check_market_dips()
+            writer.writerow({
+                "timestamp": datetime.now().strftime(
+                    "%Y-%m-%d %H:%M:%S"
+                ),
+                "nifty_change": round(
+                    nifty_change,
+                    4
+                ),
+                "nifty_price": round(
+                    nifty_price,
+                    2
+                ),
+                "niftybees_price": round(
+                    niftybees_price,
+                    2
+                ),
+                "buy_amount": buy_amount,
+                "monthly_spend": round(
+                    monthly_spend,
+                    2
+                )
+            })
+
+        print(
+            f"Signal logged to {LOG_FILE}"
+        )
+
+    except Exception as e:
+
+        print(
+            f"Could not write signal log: {e}"
+        )
+
+
+# ============================================================
+# MARKET CONTEXT
+# ============================================================
+
+def get_market_context():
+    """
+    Fetch other major indices for informational context.
+    """
+
+    indices = {
+        "Bank Nifty": "^NSEBANK",
+        "Nifty IT": "^CNXIT",
+        "Sensex": "^BSESN",
+        "Nasdaq 100": "^NDX",
+        "S&P 500": "^GSPC"
+    }
+
+    results = {}
+
+    for name, ticker in indices.items():
+
+        try:
+
+            change, price, _ = (
+                get_yahoo_data(ticker)
+            )
+
+            results[name] = {
+                "change": change,
+                "price": price
+            }
+
+        except Exception as e:
+
+            print(
+                f"Could not fetch {name}: {e}"
+            )
+
+    return results
+
+
+# ============================================================
+# FORMAT MARKET CONTEXT
+# ============================================================
+
+def format_market_context(context):
+    """
+    Format context for Telegram.
+    """
+
+    if not context:
+        return "No additional market data available."
+
+    lines = []
+
+    for name, data in context.items():
+
+        change = data["change"]
+
+        lines.append(
+            f"• {name}: `{change:+.2f}%`"
+        )
+
+    return "\n".join(lines)
+
+
+# ============================================================
+# MAIN STRATEGY
+# ============================================================
+
+def check_market_dip():
+
+    print("=" * 70)
+    print("NIFTYBEES DIP ACCUMULATION STRATEGY")
+    print("=" * 70)
+
+    print(
+        f"Signal threshold : {NIFTY_THRESHOLD:.2f}%"
+    )
+
+    print(
+        f"Buy amount       : ₹{BUY_AMOUNT}"
+    )
+
+    print(
+        f"Monthly limit    : ₹{MONTHLY_LIMIT}"
+    )
+
+    print()
+
+    # --------------------------------------------------------
+    # GET NIFTY
+    # --------------------------------------------------------
+
+    try:
+
+        (
+            nifty_change,
+            nifty_price,
+            nifty_previous
+        ) = get_yahoo_data("^NSEI")
+
+        print(
+            f"Nifty 50         : "
+            f"{nifty_change:+.2f}%"
+        )
+
+        print(
+            f"Nifty price      : "
+            f"{nifty_price:.2f}"
+        )
+
+        print(
+            f"Previous close   : "
+            f"{nifty_previous:.2f}"
+        )
+
+    except Exception as e:
+
+        print(
+            f"ERROR: Could not fetch Nifty 50: {e}"
+        )
+
+        return
+
+
+    # --------------------------------------------------------
+    # GET NIFTYBEES
+    # --------------------------------------------------------
+
+    try:
+
+        (
+            niftybees_change,
+            niftybees_price,
+            niftybees_previous
+        ) = get_yahoo_data(
+            "NIFTYBEES.NS"
+        )
+
+        print(
+            f"NIFTYBEES        : "
+            f"₹{niftybees_price:.2f}"
+        )
+
+        print(
+            f"NIFTYBEES change : "
+            f"{niftybees_change:+.2f}%"
+        )
+
+    except Exception as e:
+
+        print(
+            f"ERROR: Could not fetch NIFTYBEES: {e}"
+        )
+
+        return
+
+
+    # --------------------------------------------------------
+    # CHECK MONTHLY ALLOCATION
+    # --------------------------------------------------------
+
+    monthly_spend = (
+        get_current_month_spend()
+    )
+
+    remaining_budget = (
+        MONTHLY_LIMIT - monthly_spend
+    )
+
+    print()
+
+    print(
+        f"Monthly invested : "
+        f"₹{monthly_spend:.0f}"
+    )
+
+    print(
+        f"Remaining budget : "
+        f"₹{remaining_budget:.0f}"
+    )
+
+
+    # --------------------------------------------------------
+    # CHECK TODAY'S SIGNAL
+    # --------------------------------------------------------
+
+    already_logged = (
+        signal_already_logged_today()
+    )
+
+    if already_logged:
+
+        print()
+        print(
+            "Today's buy signal has already "
+            "been logged."
+        )
+
+        print(
+            "No duplicate purchase will be generated."
+        )
+
+        return
+
+
+    # --------------------------------------------------------
+    # SIGNAL CONDITION
+    # --------------------------------------------------------
+
+    if nifty_change <= NIFTY_THRESHOLD:
+
+        print()
+        print("🚨 NIFTY DIP DETECTED")
+        print(
+            f"Nifty is down {nifty_change:.2f}%"
+        )
+
+
+        # ----------------------------------------------------
+        # CHECK MONTHLY LIMIT
+        # ----------------------------------------------------
+
+        if remaining_budget <= 0:
+
+            print(
+                "Monthly allocation limit reached."
+            )
+
+            message = (
+                "⚠️ *NIFTYBEES DIP DETECTED*\n\n"
+                f"📉 Nifty 50: "
+                f"*{nifty_change:+.2f}%*\n"
+                f"📊 Nifty: `{nifty_price:.2f}`\n\n"
+                "🚫 *NO BUY*\n\n"
+                "Monthly NIFTYBEES allocation "
+                "limit has been reached.\n\n"
+                f"Monthly allocation: "
+                f"₹{monthly_spend:.0f} / "
+                f"₹{MONTHLY_LIMIT:.0f}"
+            )
+
+            send_telegram_alert(message)
+
+            return
+
+
+        # ----------------------------------------------------
+        # CALCULATE BUY AMOUNT
+        # ----------------------------------------------------
+
+        buy_amount = min(
+            BUY_AMOUNT,
+            remaining_budget
+        )
+
+        new_monthly_spend = (
+            monthly_spend + buy_amount
+        )
+
+
+        # ----------------------------------------------------
+        # LOG
+        # ----------------------------------------------------
+
+        log_signal(
+            nifty_change=nifty_change,
+            nifty_price=nifty_price,
+            niftybees_price=niftybees_price,
+            buy_amount=buy_amount,
+            monthly_spend=new_monthly_spend
+        )
+
+
+        # ----------------------------------------------------
+        # MARKET CONTEXT
+        # ----------------------------------------------------
+
+        context = get_market_context()
+
+        context_text = (
+            format_market_context(context)
+        )
+
+
+        # ----------------------------------------------------
+        # TELEGRAM MESSAGE
+        # ----------------------------------------------------
+
+        message = (
+            "🟢 *NIFTYBEES BUY SIGNAL*\n"
+            "\n"
+            f"📉 Nifty 50: "
+            f"*{nifty_change:+.2f}%*\n"
+            f"📊 Nifty level: "
+            f"`{nifty_price:.2f}`\n"
+            f"💰 NIFTYBEES: "
+            f"`₹{niftybees_price:.2f}`\n"
+            "\n"
+            f"🛒 *Suggested buy: ₹{buy_amount}*\n"
+            "\n"
+            "📌 *Strategy*\n"
+            "• Nifty falls ≥ 0.40%\n"
+            "• Buy NIFTYBEES\n"
+            "• Hold indefinitely\n"
+            "• Another qualifying day = another buy\n"
+            "\n"
+            "💰 *Monthly allocation*\n"
+            f"₹{new_monthly_spend:.0f} / "
+            f"₹{MONTHLY_LIMIT:.0f}\n"
+            "\n"
+            "🌍 *Market context*\n"
+            f"{context_text}\n"
+            "\n"
+            "⚠️ _Strategy signal only. "
+            "Not financial advice._"
+        )
+
+        send_telegram_alert(message)
+
+        print()
+        print(message)
+
+
+    # --------------------------------------------------------
+    # NO SIGNAL
+    # --------------------------------------------------------
+
+    else:
+
+        print()
+        print(
+            "No NIFTYBEES buy signal."
+        )
+
+        print(
+            f"Nifty move: "
+            f"{nifty_change:+.2f}%"
+        )
+
+
+# ============================================================
+# PROGRAM ENTRY
+# ============================================================
+
+if __name__ == "__main__":
+
+    try:
+
+        check_market_dip()
+
+    except Exception as e:
+
+        print()
+        print(
+            "Unexpected error:"
+        )
+
+        print(e)
