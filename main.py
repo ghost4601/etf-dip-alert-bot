@@ -649,7 +649,7 @@ def check_market_dip():
         print()
 
     # ============================================================
-    # NO SIGNAL - JUST UPDATES
+    # NO SIGNAL - SEND DAILY SUMMARY
     # ============================================================
 
     else:
@@ -657,7 +657,7 @@ def check_market_dip():
         print(f"✅ No buy signal (Nifty: {nifty_change:+.2f}%, need ≤{NIFTY_THRESHOLD:.2f}%)")
         print()
 
-        # Send daily portfolio update if holding positions
+        # ALWAYS send daily summary (even if no positions yet)
         if portfolio_stats and state["total_shares"] > 0:
             message = (
                 "📊 *DAILY PORTFOLIO UPDATE*\n\n"
@@ -668,7 +668,20 @@ def check_market_dip():
                 f"{context_text}\n\n"
                 "💡 _Monitoring for next dip..._"
             )
-            send_telegram_alert(message)
+        else:
+            # First run / no positions yet - send confirmation
+            message = (
+                "📊 *NIFTYBEES STRATEGY RUNNING*\n\n"
+                f"📈 Nifty 50: {nifty_change:+.2f}%\n"
+                f"🐝 NIFTYBEES: ₹{niftybees_price:.2f}\n\n"
+                "No buy signal today (need ≤-0.40%).\n\n"
+                "🌍 *Market Context*\n"
+                f"{context_text}\n\n"
+                "✅ Strategy is LIVE and monitoring...\n"
+                "🎯 Will buy on next dip ≥0.40%"
+            )
+        
+        send_telegram_alert(message)
 
 
 # ============================================================
