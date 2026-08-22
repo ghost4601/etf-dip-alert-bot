@@ -2,23 +2,11 @@ import os
 import requests
 
 def send_telegram_alert(message):
-  # Reads from GitHub Secrets if available; falls back to your credentials locally
-  bot_token = os.getenv(
-      'TELEGRAM_BOT_TOKEN', '8894245553:AAHNms2CBjhU5yWxgcEPaHffuZ1ocLtkU68'
-  )
-  chat_id = os.getenv('TELEGRAM_CHAT_ID', '1715656740')
-
-  url = f'https://api.telegram.org/bot{bot_token}/sendMessage'
-  payload = {'chat_id': chat_id, 'text': message, 'parse_mode': 'Markdown'}
-
-  try:
-    response = requests.post(url, json=payload, timeout=10)
-    if response.status_code == 200:
-      print('Telegram notification sent successfully.')
-    else:
-      print(f'Failed to send Telegram message: {response.text}')
-  except Exception as e:
-    print(f'Error sending Telegram alert: {e}')
+    bot_token = os.getenv(
+        'TELEGRAM_BOT_TOKEN', 
+        '8894245553:AAHNms2CBjhU5yWxgcEPaHffuZ1ocLtkU68'
+    ).strip()
+    chat_id = str(os.getenv('TELEGRAM_CHAT_ID', '1715656740')).strip()
 
     url = f'https://api.telegram.org/bot{bot_token}/sendMessage'
     payload = {
@@ -29,10 +17,11 @@ def send_telegram_alert(message):
     
     try:
         response = requests.post(url, json=payload, timeout=10)
-        if response.status_code == 200:
+        data = response.json()
+        if response.status_code == 200 and data.get('ok'):
             print("Telegram notification sent successfully.")
         else:
-            print(f"Failed to send Telegram message: {response.text}")
+            print(f"Failed to send Telegram message: {data}")
     except Exception as e:
         print(f"Error sending Telegram alert: {e}")
 
@@ -40,7 +29,10 @@ def get_yahoo_fallback(ticker):
     """Backup fetch directly from Yahoo Finance JSON endpoint."""
     url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        )
     }
     response = requests.get(url, headers=headers, timeout=10)
     data = response.json()
@@ -93,7 +85,7 @@ def check_market_dips():
                 print(f"Fallback failed for {ticker}: {yf_err}")
                 continue
 
-        # Add to the daily summary list
+        # Add to daily summary
         change_sign = "+" if percent_change >= 0 else ""
         daily_summary.append(f"• *{name}*: `{change_sign}{percent_change:.2f}%` (₹{last_price:.2f})")
 
@@ -105,7 +97,7 @@ def check_market_dips():
                 f"  LTP: ₹{last_price:.2f}{source}"
             )
 
-    # Dispatch appropriate Telegram notification
+    # Dispatch appropriate notification
     if triggers:
         alert_text = (
             "🚨 *MARKET DIP ALERT (≥ 0.4% Drop)* 🚨\n\n"
@@ -117,7 +109,7 @@ def check_market_dips():
     else:
         no_drop_text = (
             "✅ *DAILY MARKET UPDATE (No Action Needed)*\n\n"
-            "No ETF on your watchlist dropped $\\ge 0.40\\%$ today.\n\n"
+            "No ETF on your watchlist dropped ≥ 0.40% today.\n\n"
             "*Today's Closes / Moves:*\n"
             + "\n".join(daily_summary)
             + "\n\n😴 _Keep your cash dry and enjoy your evening!_"
