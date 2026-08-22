@@ -2,12 +2,23 @@ import os
 import requests
 
 def send_telegram_alert(message):
-    bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
-    chat_id = os.getenv('TELEGRAM_CHAT_ID')
+  # Reads from GitHub Secrets if available; falls back to your credentials locally
+  bot_token = os.getenv(
+      'TELEGRAM_BOT_TOKEN', '8894245553:AAHNms2CBjhU5yWxgcEPaHffuZ1ocLtkU68'
+  )
+  chat_id = os.getenv('TELEGRAM_CHAT_ID', '1715656740')
 
-    if not bot_token or not chat_id:
-        print("Telegram secrets not configured. Please check GitHub Secrets.")
-        return
+  url = f'https://api.telegram.org/bot{bot_token}/sendMessage'
+  payload = {'chat_id': chat_id, 'text': message, 'parse_mode': 'Markdown'}
+
+  try:
+    response = requests.post(url, json=payload, timeout=10)
+    if response.status_code == 200:
+      print('Telegram notification sent successfully.')
+    else:
+      print(f'Failed to send Telegram message: {response.text}')
+  except Exception as e:
+    print(f'Error sending Telegram alert: {e}')
 
     url = f'https://api.telegram.org/bot{bot_token}/sendMessage'
     payload = {
