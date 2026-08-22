@@ -1,31 +1,50 @@
-name: Daily Market Dip Alert
+name: NIFTYBEES DIP Accumulation Strategy
 
 on:
   schedule:
-    # Runs at 09:45 UTC (3:15 PM IST), Monday through Friday
+    # Runs at 3:15 PM IST (09:45 UTC), Monday through Friday
     - cron: '*/5 * * * *'
   workflow_dispatch: # Allows manual on-demand execution
 
 jobs:
-  check-market:
+  market-check:
     runs-on: ubuntu-latest
-
+    
     steps:
       - name: Check out repository code
         uses: actions/checkout@v4
-
+      
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-
+      
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
-
-      - name: Run Market Dip Checker
+          pip install requests
+      
+      - name: Run NIFTYBEES Strategy
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python main.py
+        run: python niftybees_strategy.py
+      
+      - name: Upload artifacts (logs + state)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: niftybees-logs
+          path: |
+            niftybees_signals.csv
+            portfolio_state.json
+          retention-days: 90
+      
+      - name: Commit state files to repo (keep history)
+        if: always()
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add niftybees_signals.csv portfolio_state.json || true
+          git commit -m "Update portfolio state - $(date)" || true
+          git push || true
