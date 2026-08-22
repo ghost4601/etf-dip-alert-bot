@@ -3,7 +3,7 @@ name: Daily Market Dip Alert
 on:
   schedule:
     # Runs at 09:45 UTC (3:15 PM IST), Monday through Friday
-    - cron: '33 4 * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch: # Allows manual on-demand execution
 
 jobs:
