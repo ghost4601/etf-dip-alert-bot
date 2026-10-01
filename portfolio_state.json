@@ -1,7 +1,7 @@
 {
-  "total_invested": 4236.0,
-  "total_shares": 15.759294691928371,
-  "cost_basis": 268.7937552287542,
+  "total_invested": 4586.0,
+  "total_shares": 17.11325987568079,
+  "cost_basis": 267.9793349318002,
   "last_profit_target_alerted": 0,
   "purchase_history": [
     {
@@ -101,6 +101,13 @@
       "price": 258.5,
       "shares": 0.9516441005802708,
       "cost_basis": 268.7937552287542
+    },
+    {
+      "timestamp": "2026-10-01 02:02:35",
+      "amount": 350,
+      "price": 258.5,
+      "shares": 1.3539651837524178,
+      "cost_basis": 267.9793349318002
     }
   ]
 }
